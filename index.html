@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Primary SEO -->
+    <title>Fall Forest - Infinite Autumn Voxel 3D Experience</title>
+    <meta name="description" content="Explore an infinite procedural autumn voxel forest in your browser. Experience dynamic terrain, falling leaves, and 3D lighting in this WebGL experiment.">
+    <meta name="keywords" content="fall forest, voxel engine, three.js experiment, procedural terrain, autumn leaves, 3d browser game, webgl, voxel art, interactive 3d">
+    <meta name="author" content="Chris Pirillo">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://pirillo.com/arcade/fall-forest.html">
+
+    <!-- Social Media / Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://pirillo.com/arcade/fall-forest.html">
+    <meta property="og:title" content="Fall Forest - Infinite Voxel 3D Experience">
+    <meta property="og:description" content="Wander through an infinite, procedurally generated autumn forest. A WebGL voxel experiment featuring dynamic lighting and physics.">
+    <meta property="og:image" content="https://pirillo.com/arcade/images/fall-forest.png">
+    <meta property="og:site_name" content="Chris Pirillo Arcade">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:site" content="@ChrisPirillo">
+    <meta name="twitter:creator" content="@ChrisPirillo">
+    <meta name="twitter:title" content="Fall Forest - Infinite Voxel 3D Experience">
+    <meta name="twitter:description" content="Explore an infinite procedural autumn voxel forest in your browser.">
+    <meta name="twitter:image" content="https://pirillo.com/arcade/images/fall-forest.png">
+
+    <!-- Structured Data (JSON-LD) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Fall Forest",
+      "url": "https://pirillo.com/arcade/fall-forest.html",
+      "description": "An infinite procedural autumn voxel forest simulation utilizing Three.js and Simplex Noise.",
+      "image": "https://pirillo.com/arcade/images/fall-forest.png",
+      "genre": "Simulation",
+      "author": {
+        "@type": "Person",
+        "name": "Chris Pirillo",
+        "url": "https://chris.pirillo.com"
+      },
+      "applicationCategory": "Game",
+      "operatingSystem": "Any"
+    }
+    </script>
+
+    <!-- Performance: Preconnect to CDNs and Analytics -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://unpkg.com">
+    <link rel="preconnect" href="https://www.googletagmanager.com">
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="dns-prefetch" href="https://unpkg.com">
+    <link rel="dns-prefetch" href="https://www.googletagmanager.com">
+
+    <!-- Google Analytics (Deferred/Async) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-1CQ4D3VQ3L"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-1CQ4D3VQ3L');
+    </script>
+
+    <style>
+        /* Critical CSS for layout stability and avoiding FOUC */
+        body { margin: 0; overflow: hidden; background-color: #e6ccb3; font-family: 'Courier New', Courier, monospace; }
+        /* Crosshair removed */
+        canvas { display: block; cursor: pointer; outline: none; }
+    </style>
+</head>
+<body>
+
+    <!-- Crosshair removed -->
+
+    <!-- Import Maps for Three.js and Simplex Noise -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+                "simplex-noise": "https://unpkg.com/simplex-noise@4.0.1/dist/esm/simplex-noise.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+        import { createNoise2D } from 'simplex-noise';
+
+        // --- Configuration ---
+        const CHUNK_SIZE = 16;
+        const RENDER_DISTANCE = 4; 
+        const VOXEL_SIZE = 1;
+        const TREE_DENSITY = 0.18; 
+        const NOISE_SCALE = 0.03;
+        
+        // Colors
+        const COLORS = {
+            ground: [0x3b5e2b, 0x4a6b38, 0x5c4033, 0x463325],
+            wood: 0x3e2723,
+            leaves: [0xd35400, 0xe67e22, 0xf1c40f, 0xc0392b]
+        };
+        const FOG_COLOR = 0xffeebb;
+
+        // --- Globals ---
+        let scene, camera, renderer, controls;
+        let noise2D;
+        let chunks = {}; 
+        
+        // Player State
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+        const playerHeight = 2.5;
+        const moveSpeed = 50.0;
+        let lastTime = performance.now();
+        
+        // Leaf System
+        let leafMesh;
+        let leafData = []; 
+        const LEAF_COUNT = 6000; 
+
+        // Reusable Geometry/Material
+        const boxGeometry = new THREE.BoxGeometry(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE);
+        const groundMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+        const woodMat = new THREE.MeshLambertMaterial({ color: COLORS.wood });
+        const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+
+        // --- Chunk Generation System ---
+
+        class Chunk {
+            constructor(cx, cz) {
+                this.cx = cx;
+                this.cz = cz;
+                this.group = new THREE.Group();
+                this.generate();
+            }
+
+            generate() {
+                const groundData = []; 
+                const woodData = [];   
+                const treeLeafData = [];   
+
+                const startX = this.cx * CHUNK_SIZE;
+                const startZ = this.cz * CHUNK_SIZE;
+
+                for (let x = 0; x < CHUNK_SIZE; x++) {
+                    for (let z = 0; z < CHUNK_SIZE; z++) {
+                        const wx = startX + x;
+                        const wz = startZ + z;
+
+                        // Terrain Height
+                        let h = noise2D(wx * NOISE_SCALE, wz * NOISE_SCALE) * 4;
+                        h += noise2D(wx * 0.1, wz * 0.1) * 1;
+                        const y = Math.floor(h);
+
+                        // Ground Voxel
+                        const colorHex = COLORS.ground[Math.floor(Math.abs(noise2D(wx * 0.5, wz * 0.5)) * COLORS.ground.length) % COLORS.ground.length];
+                        groundData.push({ x: wx, y: y, z: wz, color: new THREE.Color(colorHex) });
+
+                        // Trees
+                        const treeNoise = noise2D(wx * 2.5, wz * 2.5);
+                        if (treeNoise > (1 - TREE_DENSITY) && (x % 2 !== 0 || z % 2 !== 0)) {
+                            this.buildTree(wx, y + 1, wz, woodData, treeLeafData);
+                        }
+                    }
+                }
+
+                if (groundData.length > 0) this.createMesh(groundData, groundMat, this.group, true);
+                if (woodData.length > 0) this.createMesh(woodData, woodMat, this.group, false);
+                if (treeLeafData.length > 0) this.createMesh(treeLeafData, leafMat, this.group, true);
+
+                scene.add(this.group);
+            }
+
+            buildTree(rootX, rootY, rootZ, woodArr, leafArr) {
+                const type = Math.random();
+                let trunkHeight, radiusX, radiusY, radiusZ;
+
+                // EVEN BIGGER TREES
+                if (type < 0.4) {
+                    // Tall Skinny
+                    trunkHeight = 15 + Math.floor(Math.random() * 10); // 15-25 height
+                    radiusX = 1.5 + Math.random() * 1.0;
+                    radiusZ = radiusX;
+                    radiusY = 6.0 + Math.random() * 4.0;
+                } else if (type < 0.7) {
+                    // Oak-ish (Broad)
+                    trunkHeight = 10 + Math.floor(Math.random() * 6); // 10-16 height
+                    radiusX = 4.0 + Math.random() * 2.5;
+                    radiusZ = radiusX;
+                    radiusY = 3.5 + Math.random() * 2.0;
+                } else {
+                    // Giant
+                    trunkHeight = 15 + Math.floor(Math.random() * 15); // 15-30 height
+                    radiusX = 3.0 + Math.random() * 2.0;
+                    radiusZ = radiusX;
+                    radiusY = 5.0 + Math.random() * 3.0;
+                }
+
+                for (let i = 0; i < trunkHeight; i++) {
+                    woodArr.push({ x: rootX, y: rootY + i, z: rootZ });
+                }
+
+                const centerX = rootX;
+                const centerY = rootY + trunkHeight - (radiusY * 0.4);
+                const centerZ = rootZ;
+
+                const minX = Math.floor(-radiusX);
+                const maxX = Math.ceil(radiusX);
+                const minY = Math.floor(-radiusY);
+                const maxY = Math.ceil(radiusY);
+                const minZ = Math.floor(-radiusZ);
+                const maxZ = Math.ceil(radiusZ);
+
+                for (let lx = minX; lx <= maxX; lx++) {
+                    for (let ly = minY; ly <= maxY; ly++) {
+                        for (let lz = minZ; lz <= maxZ; lz++) {
+                            const dist = Math.pow(lx / radiusX, 2) + Math.pow(ly / radiusY, 2) + Math.pow(lz / radiusZ, 2);
+                            const threshold = 1.0 + (Math.random() * 0.3 - 0.15);
+
+                            if (dist < threshold) {
+                                const vx = centerX + lx;
+                                const vy = Math.floor(centerY + ly);
+                                const vz = centerZ + lz;
+
+                                if (vx === rootX && vz === rootZ && vy < rootY + trunkHeight) continue;
+
+                                const colorHex = COLORS.leaves[Math.floor(Math.random() * COLORS.leaves.length)];
+                                leafArr.push({
+                                    x: vx, y: vy, z: vz,
+                                    color: new THREE.Color(colorHex)
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            createMesh(data, material, parent, useColor) {
+                const mesh = new THREE.InstancedMesh(boxGeometry, material, data.length);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                const dummy = new THREE.Object3D();
+                for (let i = 0; i < data.length; i++) {
+                    dummy.position.set(data[i].x, data[i].y, data[i].z);
+                    dummy.updateMatrix();
+                    mesh.setMatrixAt(i, dummy.matrix);
+                    if (useColor && data[i].color) mesh.setColorAt(i, data[i].color);
+                }
+                mesh.instanceMatrix.needsUpdate = true;
+                if (useColor) mesh.instanceColor.needsUpdate = true;
+                parent.add(mesh);
+            }
+
+            dispose() {
+                scene.remove(this.group);
+                this.group.children.forEach(child => {
+                    if (child.geometry) child.geometry.dispose();
+                });
+            }
+        }
+
+        function init() {
+            noise2D = createNoise2D();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(FOG_COLOR);
+            scene.fog = new THREE.FogExp2(FOG_COLOR, 0.025);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.body.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffaa77, 0.8);
+            dirLight.position.set(50, 100, 50);
+            dirLight.castShadow = true;
+            dirLight.shadow.camera.left = -50;
+            dirLight.shadow.camera.right = 50;
+            dirLight.shadow.camera.top = 50;
+            dirLight.shadow.camera.bottom = -50;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            scene.add(dirLight);
+
+            controls = new PointerLockControls(camera, document.body);
+            
+            document.addEventListener('click', () => {
+                controls.lock();
+            });
+
+            // Generate chunks
+            updateChunks();
+            createFallingLeaves();
+
+            // INITIAL POSITION FIX:
+            // Snap player to terrain height immediately so it's not a blank screen at start
+            const startY = getTerrainHeight(0, 0);
+            camera.position.set(0, startY + playerHeight, 0);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function updateChunks() {
+            const px = camera.position.x;
+            const pz = camera.position.z;
+            const currentCx = Math.floor(px / CHUNK_SIZE);
+            const currentCz = Math.floor(pz / CHUNK_SIZE);
+
+            const newKeys = new Set();
+
+            for (let x = -RENDER_DISTANCE; x <= RENDER_DISTANCE; x++) {
+                for (let z = -RENDER_DISTANCE; z <= RENDER_DISTANCE; z++) {
+                    if (x*x + z*z > RENDER_DISTANCE*RENDER_DISTANCE + 1) continue;
+                    const cx = currentCx + x;
+                    const cz = currentCz + z;
+                    const key = `${cx},${cz}`;
+                    newKeys.add(key);
+                    if (!chunks[key]) chunks[key] = new Chunk(cx, cz);
+                }
+            }
+
+            for (const key in chunks) {
+                if (!newKeys.has(key)) {
+                    chunks[key].dispose();
+                    delete chunks[key];
+                }
+            }
+        }
+
+        function getTerrainHeight(x, z) {
+            let h = noise2D(x * NOISE_SCALE, z * NOISE_SCALE) * 4;
+            h += noise2D(x * 0.1, z * 0.1) * 1;
+            return Math.floor(h) + VOXEL_SIZE;
+        }
+
+        function createFallingLeaves() {
+            const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+            const material = new THREE.MeshBasicMaterial({ color: 0xffffff }); 
+            
+            leafMesh = new THREE.InstancedMesh(geometry, material, LEAF_COUNT);
+            leafMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            
+            const dummy = new THREE.Object3D();
+
+            // Initialize leaves around the starting area
+            for (let i = 0; i < LEAF_COUNT; i++) {
+                const x = (Math.random() - 0.5) * 80; // Wider start area
+                const z = (Math.random() - 0.5) * 80;
+                
+                const groundY = getTerrainHeight(x, z);
+                const y = groundY + 15 + Math.random() * 25; // Higher start due to bigger trees
+                
+                const color = new THREE.Color(COLORS.leaves[Math.floor(Math.random() * COLORS.leaves.length)]);
+                
+                leafData.push({
+                    x: x,
+                    y: y,
+                    z: z,
+                    speed: 0.8 + Math.random() * 2.5,
+                    wobbleOffset: Math.random() * 10,
+                    rotX: Math.random() * Math.PI,
+                    rotY: Math.random() * Math.PI,
+                    rotSpeedX: (Math.random() - 0.5) * 0.15,
+                    rotSpeedY: (Math.random() - 0.5) * 0.15
+                });
+
+                leafMesh.setColorAt(i, color);
+            }
+            
+            leafMesh.instanceColor.needsUpdate = true;
+            scene.add(leafMesh);
+        }
+
+        function updateLeaves(dt, playerX, playerZ) {
+            if (!leafMesh) return;
+            
+            const dummy = new THREE.Object3D();
+            const range = 45; 
+
+            for (let i = 0; i < LEAF_COUNT; i++) {
+                const data = leafData[i];
+
+                // Update position
+                data.y -= data.speed * dt;
+                
+                // Wobble
+                const time = Date.now() * 0.001;
+                const wobbleX = Math.sin(time + data.wobbleOffset) * 3.0 * dt;
+                const wobbleZ = Math.cos(time + data.wobbleOffset * 0.5) * 3.0 * dt;
+                data.x += wobbleX;
+                data.z += wobbleZ;
+
+                // Spin
+                data.rotX += data.rotSpeedX;
+                data.rotY += data.rotSpeedY;
+
+                // Check Terrain Height
+                const groundY = getTerrainHeight(data.x, data.z);
+
+                // 1. Reset Height if hits ground
+                if (data.y < groundY) {
+                    data.y = groundY + 15 + Math.random() * 20; 
+                }
+
+                // 2. Keep within range of player (Infinite field logic)
+                const relX = data.x - playerX;
+                const relZ = data.z - playerZ;
+
+                if (relX > range) data.x -= range * 2;
+                if (relX < -range) data.x += range * 2;
+                if (relZ > range) data.z -= range * 2;
+                if (relZ < -range) data.z += range * 2;
+                
+                // Wrap height check
+                if (Math.abs(relX) > range || Math.abs(relZ) > range) {
+                     const newGroundY = getTerrainHeight(data.x, data.z);
+                     if (data.y < newGroundY + 5) data.y = newGroundY + 15 + Math.random() * 20;
+                }
+
+                // Update Matrix
+                dummy.position.set(data.x, data.y, data.z);
+                dummy.rotation.set(data.rotX, data.rotY, 0);
+                dummy.updateMatrix();
+                leafMesh.setMatrixAt(i, dummy.matrix);
+            }
+            
+            leafMesh.instanceMatrix.needsUpdate = true;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Movement Logic
+        const moveState = { forward: false, backward: false, left: false, right: false };
+        document.addEventListener('keydown', (e) => {
+            switch (e.code) {
+                case 'ArrowUp':
+                case 'KeyW': moveState.forward = true; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveState.left = true; break;
+                case 'ArrowDown':
+                case 'KeyS': moveState.backward = true; break;
+                case 'ArrowRight':
+                case 'KeyD': moveState.right = true; break;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            switch (e.code) {
+                case 'ArrowUp':
+                case 'KeyW': moveState.forward = false; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveState.left = false; break;
+                case 'ArrowDown':
+                case 'KeyS': moveState.backward = false; break;
+                case 'ArrowRight':
+                case 'KeyD': moveState.right = false; break;
+            }
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now();
+            const delta = (time - lastTime) / 1000;
+            lastTime = time;
+
+            const playerPos = camera.position; 
+            updateChunks();
+            updateLeaves(delta, playerPos.x, playerPos.z);
+
+            if (controls.isLocked) {
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                direction.z = Number(moveState.forward) - Number(moveState.backward);
+                direction.x = Number(moveState.right) - Number(moveState.left);
+                direction.normalize();
+
+                if (moveState.forward || moveState.backward) velocity.z -= direction.z * moveSpeed * delta;
+                if (moveState.left || moveState.right) velocity.x -= direction.x * moveSpeed * delta;
+
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+
+                const objPos = controls.getObject().position;
+                const groundY = getTerrainHeight(objPos.x, objPos.z);
+                
+                if (objPos.y < groundY + playerHeight) {
+                    objPos.y = THREE.MathUtils.lerp(objPos.y, groundY + playerHeight, 0.2);
+                } else {
+                     objPos.y = THREE.MathUtils.lerp(objPos.y, groundY + playerHeight, 0.1);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+        
+        init();
+        animate();
+
+    </script>
+</body>
+</html>
